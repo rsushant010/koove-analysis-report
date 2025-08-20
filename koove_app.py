@@ -5,6 +5,8 @@ import datetime
 import numpy as np
 import re
 import zipfile
+from openpyxl import load_workbook
+from openpyxl.utils.dataframe import dataframe_to_rows
 
 # --- Helper Functions for Data Processing ---
 
@@ -42,8 +44,8 @@ def process_oee_data(oee_df, target_date, analysis_df):
             analysis_df.loc[oee_sno, 'Remark'] = f"OEE is {oee * 100:.0f}%."
         else:
             for sno in [hrs_sno, cap_sno, qual_sno, oee_sno]:
-                analysis_df.loc[sno, 'Actual'] = 'Shutdown'
-            analysis_df.loc[hrs_sno, 'Remark'] = 'Line was Shutdown for the day.'
+                analysis_df.loc[sno, 'Actual'] = 'shutdown'
+            analysis_df.loc[hrs_sno, 'Remark'] = 'Line was shutdown for the day.'
     return analysis_df
 
 def process_production_target(prod_df, analysis_df):
@@ -52,7 +54,6 @@ def process_production_target(prod_df, analysis_df):
         st.warning("'Gloves Production' sheet not found for production target processing.")
         return analysis_df
         
-    # Efficiently search for the cell containing "target mtd"
     mask = prod_df.applymap(lambda x: "target mtd" in str(x).lower())
     match = mask.stack()
     if not match.any():
@@ -84,7 +85,6 @@ def process_consumption(consump_df, target_date, analysis_df):
         st.warning("'coal & elec' sheet not found for consumption processing.")
         return analysis_df
 
-    # Efficiently search for the date
     date_mask = consump_df.apply(pd.to_datetime, errors='coerce').applymap(lambda x: x.date() == target_date.date() if pd.notna(x) else False)
     date_match = date_mask.stack()
     if not date_match.any():
@@ -93,7 +93,6 @@ def process_consumption(consump_df, target_date, analysis_df):
         
     _, date_col_index = date_match[date_match].index[0]
 
-    # Efficiently find the rows for Coal and Electricity
     first_col = consump_df.iloc[:, 0].str.lower()
     coal_row_index = first_col[first_col.str.contains("coal", na=False)].index
     elec_row_index = first_col[first_col.str.contains("electri", na=False)].index
@@ -158,7 +157,6 @@ def process_order_details(order_df, analysis_df):
         
     last_row = order_df.iloc[-1]
     
-    # Flexible column name matching
     clear_order_col = next((col for col in order_df.columns if "total payment receive" in str(col).lower()), None)
     dispatch_col = next((col for col in order_df.columns if "total dispatch price" in str(col).lower()), None)
     pending_col = next((col for col in order_df.columns if "advance payment" in str(col).lower()), None)
@@ -183,7 +181,6 @@ def process_order_details(order_df, analysis_df):
 
 def create_report(xls, target_date):
     """Main function to create a single analysis report DataFrame."""
-    # Read all necessary sheets once
     oee_sheet_name = find_sheet_by_keyword(xls, "oee")
     oee_df = pd.read_excel(xls, sheet_name=oee_sheet_name) if oee_sheet_name else None
     
@@ -200,16 +197,13 @@ def create_report(xls, target_date):
         st.error(f"Could not find 'OEE' sheet. Cannot proceed.")
         return None
 
-    # Pre-process OEE dates
     oee_df['Date'] = pd.to_datetime(oee_df['Date'], errors='coerce')
     oee_df.dropna(subset=['Date'], inplace=True)
     oee_df.fillna(0, inplace=True)
 
-    # Create the base report structure
     analysis_data = {'Sl. No.': [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,17,18], 'Particulars': ['LINE 1 Working Hrs.','LINE 1 Production Capacity','LINE 1 Quality','LINE 1 OEE','LINE 2 Working Hrs.','LINE 2 Production Capacity','LINE 2 Quality','LINE 2 OEE','LINE 3 Working Hrs.','LINE 3 Production Capacity','LINE 3 Quality','LINE 3 OEE','ABNORMALITIES (1+2+3)','PRODUCTION TARGET (Qty/day)','PRODUCTION TARGET (in %)','COAL CONSUMPTION PER DAY','ELECTRICITY CONSUMPTION PER DAY'], 'Unit': ['Hrs','Pcs/hrs','%','%','Hrs','Pcs/hrs','%','%','Hrs','Pcs/hrs','%','%','Nos','Pcs','%','Kg','Unit'], 'Standard': ['22 Hrs','18181 Pcs/hrs','100 %','80 %','22 Hrs','22727 Pcs/hrs','100 %','80 %','22 Hrs','22727 Pcs/hrs','100 %','80 %','0 Nos','','','',''], 'Actual': [''] * 17, 'Remark': [''] * 17}
     analysis_df = pd.DataFrame(analysis_data).set_index('Sl. No.')
     
-    # Run all processing functions
     analysis_df = process_oee_data(oee_df, target_date, analysis_df)
     analysis_df = process_abnormalities(analysis_df)
     analysis_df = process_production_target(prod_df, analysis_df)
@@ -217,7 +211,7 @@ def create_report(xls, target_date):
     analysis_df = process_inventory(prod_df, analysis_df)
     analysis_df = process_order_details(order_df, analysis_df)
 
-    return analysis_df.sort_index().reset_index().drop(columns=['Sl. No.'])
+    return analysis_df.sort_index().reset_index()
 
 # --- Streamlit App UI ---
 
@@ -233,8 +227,12 @@ uploaded_files = st.sidebar.file_uploader("1. Upload Excel Workbooks", type="xls
 file_dates = {}
 if uploaded_files:
     st.sidebar.subheader("2. Set Analysis Dates")
-    for uploaded_file in uploaded_files:
-        file_dates[uploaded_file.name] = st.sidebar.date_input(f"Date for {uploaded_file.name}", datetime.date.today(), key=uploaded_file.name)
+    for i, uploaded_file in enumerate(uploaded_files):
+        file_dates[uploaded_file.name] = st.sidebar.date_input(
+            f"Date for {uploaded_file.name}", 
+            datetime.date.today(), 
+            key=f"{uploaded_file.name}_{i}"
+        )
 
     if st.sidebar.button("🚀 Generate Reports", type="primary"):
         st.session_state.report_data = []
@@ -250,20 +248,26 @@ if uploaded_files:
                 final_report_df = create_report(xls, target_date)
                 
                 if final_report_df is not None:
-                    full_workbook_buffer = io.BytesIO()
-                    with pd.ExcelWriter(full_workbook_buffer, engine='openpyxl') as writer:
-                        final_report_df.to_excel(writer, sheet_name='Analysis Points', index=False)
-                        for sheet_name in xls.sheet_names:
-                            pd.read_excel(xls, sheet_name=sheet_name).to_excel(writer, sheet_name=sheet_name, index=False)
+                    # Load the original workbook to modify it
+                    uploaded_file.seek(0) # Reset buffer position
+                    wb = load_workbook(uploaded_file)
                     
-                    analysis_only_buffer = io.BytesIO()
-                    with pd.ExcelWriter(analysis_only_buffer, engine='openpyxl') as writer:
-                        final_report_df.to_excel(writer, sheet_name='Analysis Points', index=False)
+                    # Create the new sheet at the first position
+                    ws = wb.create_sheet("Analysis Points", 0)
+                    
+                    # Write the DataFrame to the new sheet
+                    for r in dataframe_to_rows(final_report_df, index=False, header=True):
+                        ws.append(r)
+                    
+                    # Save the modified workbook to a buffer
+                    modified_workbook_buffer = io.BytesIO()
+                    wb.save(modified_workbook_buffer)
+                    modified_workbook_buffer.seek(0)
 
                     st.session_state.report_data.append({
-                        'file_name': file_name, 'target_date': target_date,
-                        'full_workbook_buffer': full_workbook_buffer.getvalue(),
-                        'analysis_only_buffer': analysis_only_buffer.getvalue()
+                        'file_name': file_name, 
+                        'target_date': target_date,
+                        'modified_workbook_buffer': modified_workbook_buffer.getvalue()
                     })
             except Exception as e:
                 st.error(f"An error occurred while processing '{file_name}': {e}")
@@ -276,26 +280,13 @@ if st.session_state.report_data:
     for report in st.session_state.report_data:
         st.subheader(f"Report for '{report['file_name']}' on {report['target_date'].strftime('%Y-%m-%d')}")
         st.download_button(
-            label=f"📥 Download Analysis Sheet (.xlsx)",
-            data=report['analysis_only_buffer'],
-            file_name=f"Analysis_Points_{report['file_name']}",
+            label=f"📥 Download Report (.xlsx)",
+            data=report['modified_workbook_buffer'],
+            file_name=f"Report_{report['file_name']}",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key=f"download_analysis_{report['file_name']}"
+            key=f"download_report_{report['file_name']}"
         )
         st.markdown("---")
 
-    if len(st.session_state.report_data) > 1:
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for report in st.session_state.report_data:
-                zf.writestr(f"Report_{report['file_name']}", report['full_workbook_buffer'])
-        
-        st.header("Combined Download")
-        st.download_button(
-            label="📦 Download All Combined Reports (.zip)",
-            data=zip_buffer.getvalue(),
-            file_name="All_Analysis_Reports.zip",
-            mime="application/zip",
-        )
 elif not uploaded_files:
     st.info("Please upload one or more Excel files to begin.")
