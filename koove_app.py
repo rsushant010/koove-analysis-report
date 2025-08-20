@@ -171,6 +171,10 @@ def process_order_details(xls, analysis_df):
 st.set_page_config(layout="wide")
 st.title("📊 Multi-File Analysis Report Generator")
 
+# Initialize session state to hold report data
+if 'report_data' not in st.session_state:
+    st.session_state.report_data = []
+
 st.sidebar.header("⚙️ Controls")
 uploaded_files = st.sidebar.file_uploader(
     "1. Upload Excel Workbooks",
@@ -188,77 +192,100 @@ if uploaded_files:
             key=uploaded_file.name
         )
 
-    if st.sidebar.button("🚀 Generate & Prepare Download", type="primary"):
-        st.header("Processing Files...")
-        progress_bar = st.progress(0)
-        zip_buffer = io.BytesIO()
+    if st.sidebar.button("🚀 Generate Reports", type="primary"):
+        st.session_state.report_data = [] # Clear previous reports
+        progress_bar = st.progress(0, "Starting processing...")
         
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for i, uploaded_file in enumerate(uploaded_files):
-                file_name = uploaded_file.name
-                target_date = pd.to_datetime(file_dates[file_name])
+        for i, uploaded_file in enumerate(uploaded_files):
+            file_name = uploaded_file.name
+            target_date = pd.to_datetime(file_dates[file_name])
+            
+            progress_bar.progress((i) / len(uploaded_files), f"Processing '{file_name}'...")
+            
+            try:
+                xls = pd.ExcelFile(uploaded_file)
+                oee_sheet_name = find_sheet_by_keyword(xls, "oee")
+                if not oee_sheet_name:
+                    st.error(f"Could not find 'OEE' sheet in '{file_name}'. Skipping.")
+                    continue
+                    
+                oee_df = pd.read_excel(xls, sheet_name=oee_sheet_name)
+                oee_df['Date'] = pd.to_datetime(oee_df['Date'], errors='coerce')
+                oee_df.dropna(subset=['Date'], inplace=True)
+                oee_df.fillna(0, inplace=True)
+
+                analysis_data = {'Sl. No.': [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,17,18], 'Particulars': ['LINE 1 Working Hrs.','LINE 1 Production Capacity','LINE 1 Quality','LINE 1 OEE','LINE 2 Working Hrs.','LINE 2 Production Capacity','LINE 2 Quality','LINE 2 OEE','LINE 3 Working Hrs.','LINE 3 Production Capacity','LINE 3 Quality','LINE 3 OEE','ABNORMALITIES (1+2+3)','PRODUCTION TARGET (Qty/day)','PRODUCTION TARGET (in %)','COAL CONSUMPTION PER DAY','ELECTRICITY CONSUMPTION PER DAY'], 'Unit': ['Hrs','Pcs/hrs','%','%','Hrs','Pcs/hrs','%','%','Hrs','Pcs/hrs','%','%','Nos','Pcs','%','Kg','Unit'], 'Standard': ['22 Hrs','18181 Pcs/hrs','100 %','80 %','22 Hrs','22727 Pcs/hrs','100 %','80 %','22 Hrs','22727 Pcs/hrs','100 %','80 %','0 Nos','','','',''], 'Actual': [''] * 17, 'Remark': [''] * 17}
+                analysis_df = pd.DataFrame(analysis_data).set_index('Sl. No.')
                 
-                st.subheader(f"Processing '{file_name}' for {target_date.strftime('%Y-%m-%d')}")
+                # Run all processing functions
+                analysis_df = process_oee_data(oee_df, target_date, analysis_df)
+                analysis_df = process_abnormalities(xls, analysis_df)
+                analysis_df = process_production_target(xls, analysis_df)
+                analysis_df = process_consumption(xls, target_date, analysis_df)
+                analysis_df = process_inventory(xls, analysis_df)
+                analysis_df = process_order_details(xls, analysis_df)
+
+                final_report_df = analysis_df.sort_index().reset_index().drop(columns=['Sl. No.'])
                 
-                try:
-                    xls = pd.ExcelFile(uploaded_file)
-                    oee_sheet_name = find_sheet_by_keyword(xls, "oee")
-                    if not oee_sheet_name:
-                        st.error(f"Could not find 'OEE' sheet in '{file_name}'. Skipping.")
-                        continue
-                        
-                    oee_df = pd.read_excel(xls, sheet_name=oee_sheet_name)
-                    oee_df['Date'] = pd.to_datetime(oee_df['Date'], errors='coerce')
-                    oee_df.dropna(subset=['Date'], inplace=True)
-                    oee_df.fillna(0, inplace=True)
-
-                    analysis_data = {'Sl. No.': [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,17,18], 'Particulars': ['LINE 1 Working Hrs.','LINE 1 Production Capacity','LINE 1 Quality','LINE 1 OEE','LINE 2 Working Hrs.','LINE 2 Production Capacity','LINE 2 Quality','LINE 2 OEE','LINE 3 Working Hrs.','LINE 3 Production Capacity','LINE 3 Quality','LINE 3 OEE','ABNORMALITIES (1+2+3)','PRODUCTION TARGET (Qty/day)','PRODUCTION TARGET (in %)','COAL CONSUMPTION PER DAY','ELECTRICITY CONSUMPTION PER DAY'], 'Unit': ['Hrs','Pcs/hrs','%','%','Hrs','Pcs/hrs','%','%','Hrs','Pcs/hrs','%','%','Nos','Pcs','%','Kg','Unit'], 'Standard': ['22 Hrs','18181 Pcs/hrs','100 %','80 %','22 Hrs','22727 Pcs/hrs','100 %','80 %','22 Hrs','22727 Pcs/hrs','100 %','80 %','0 Nos','','','',''], 'Actual': [''] * 17, 'Remark': [''] * 17}
-                    analysis_df = pd.DataFrame(analysis_data).set_index('Sl. No.')
-                    
-                    # Run all processing functions
-                    analysis_df = process_oee_data(oee_df, target_date, analysis_df)
-                    analysis_df = process_abnormalities(xls, analysis_df)
-                    analysis_df = process_production_target(xls, analysis_df)
-                    analysis_df = process_consumption(xls, target_date, analysis_df)
-                    analysis_df = process_inventory(xls, analysis_df)
-                    analysis_df = process_order_details(xls, analysis_df)
-
-                    final_report_df = analysis_df.sort_index().reset_index().drop(columns=['Sl. No.'])
-                    
-                    # Preview the generated report in the app
-                    st.dataframe(final_report_df.fillna(''))
-
-                    # Create the new workbook in memory for download
-                    output_buffer = io.BytesIO()
-                    with pd.ExcelWriter(output_buffer, engine='openpyxl') as writer:
-                        final_report_df.to_excel(writer, sheet_name='Analysis Points', index=False)
-                        for sheet_name in xls.sheet_names:
-                            original_sheet_df = pd.read_excel(xls, sheet_name=sheet_name)
-                            original_sheet_df.to_excel(writer, sheet_name=sheet_name, index=False)
-                    
-                    # Add individual download button for this file
-                    st.download_button(
-                        label=f"📥 Download this report ({file_name})",
-                        data=output_buffer.getvalue(),
-                        file_name=f"Report_{file_name}",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        key=f"download_{file_name}"
-                    )
-                    
-                    # Add the new workbook to the zip file
-                    zf.writestr(f"Report_{file_name}", output_buffer.getvalue())
-
-                except Exception as e:
-                    st.error(f"An error occurred while processing '{file_name}': {e}")
+                # --- Create two different buffers for download ---
+                # 1. Buffer for the full workbook
+                full_workbook_buffer = io.BytesIO()
+                with pd.ExcelWriter(full_workbook_buffer, engine='openpyxl') as writer:
+                    final_report_df.to_excel(writer, sheet_name='Analysis Points', index=False)
+                    for sheet_name in xls.sheet_names:
+                        original_sheet_df = pd.read_excel(xls, sheet_name=sheet_name)
+                        original_sheet_df.to_excel(writer, sheet_name=sheet_name, index=False)
                 
-                progress_bar.progress((i + 1) / len(uploaded_files))
+                # 2. Buffer for just the analysis sheet
+                analysis_only_buffer = io.BytesIO()
+                with pd.ExcelWriter(analysis_only_buffer, engine='openpyxl') as writer:
+                    final_report_df.to_excel(writer, sheet_name='Analysis Points', index=False)
 
-        st.header("✅ Processing Complete!")
+                # Store all data for rendering after the loop
+                st.session_state.report_data.append({
+                    'file_name': file_name,
+                    'target_date': target_date,
+                    'report_df': final_report_df,
+                    'full_workbook_buffer': full_workbook_buffer.getvalue(),
+                    'analysis_only_buffer': analysis_only_buffer.getvalue()
+                })
+
+            except Exception as e:
+                st.error(f"An error occurred while processing '{file_name}': {e}")
+        
+        progress_bar.progress(1.0, "All files processed!")
+
+# --- Display reports and download buttons if they exist in session state ---
+if st.session_state.report_data:
+    st.header("Generated Reports")
+    
+    for report in st.session_state.report_data:
+        st.subheader(f"Report for '{report['file_name']}' on {report['target_date'].strftime('%Y-%m-%d')}")
+        # The line below that displays the dataframe has been removed.
+        # st.dataframe(report['report_df'].fillna('')) 
         st.download_button(
-            label="📥 Download All Reports (.zip)",
+            label=f"📥 Download Analysis Sheet (.xlsx)",
+            data=report['analysis_only_buffer'],
+            file_name=f"Analysis_Points_{report['file_name']}",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"download_analysis_{report['file_name']}"
+        )
+        st.markdown("---")
+
+    # Prepare the combined ZIP file for download
+    if len(st.session_state.report_data) > 1:
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for report in st.session_state.report_data:
+                zf.writestr(f"Report_{report['file_name']}", report['full_workbook_buffer'])
+        
+        st.header("Combined Download")
+        st.download_button(
+            label="📦 Download All Combined Reports (.zip)",
             data=zip_buffer.getvalue(),
-            file_name="Analysis_Reports.zip",
+            file_name="All_Analysis_Reports.zip",
             mime="application/zip",
         )
-else:
+
+elif not uploaded_files:
     st.info("Please upload one or more Excel files to begin.")
