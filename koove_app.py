@@ -44,8 +44,8 @@ def process_oee_data(oee_df, target_date, analysis_df):
             analysis_df.loc[oee_sno, 'Remark'] = f"OEE is {oee * 100:.0f}%."
         else:
             for sno in [hrs_sno, cap_sno, qual_sno, oee_sno]:
-                analysis_df.loc[sno, 'Actual'] = 'shutdown'
-            analysis_df.loc[hrs_sno, 'Remark'] = 'Line was shutdown for the day.'
+                analysis_df.loc[sno, 'Actual'] = 'Shutdown'
+            analysis_df.loc[hrs_sno, 'Remark'] = 'Line was Shutdown for the day.'
     return analysis_df
 
 def process_production_target(prod_df, analysis_df):
