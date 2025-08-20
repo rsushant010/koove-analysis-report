@@ -7,7 +7,6 @@ import re
 import zipfile
 
 # --- Helper Functions for Data Processing ---
-# These functions contain the core logic for processing each part of the report.
 
 def find_sheet_by_keyword(xls, keyword):
     """Finds the first sheet in an Excel file containing a specific keyword (case-insensitive)."""
@@ -43,115 +42,127 @@ def process_oee_data(oee_df, target_date, analysis_df):
             analysis_df.loc[oee_sno, 'Remark'] = f"OEE is {oee * 100:.0f}%."
         else:
             for sno in [hrs_sno, cap_sno, qual_sno, oee_sno]:
-                analysis_df.loc[sno, 'Actual'] = 'shutdown'
-            analysis_df.loc[hrs_sno, 'Remark'] = 'Line was shutdown for the day.'
+                analysis_df.loc[sno, 'Actual'] = 'Shutdown'
+            analysis_df.loc[hrs_sno, 'Remark'] = 'Line was Shutdown for the day.'
     return analysis_df
 
-def process_production_target(xls, analysis_df):
-    prod_sheet_name = find_sheet_by_keyword(xls, "Gloves Production")
-    if not prod_sheet_name:
+def process_production_target(prod_df, analysis_df):
+    """Processes the Gloves Production DataFrame to find and extract MTD targets."""
+    if prod_df is None:
         st.warning("'Gloves Production' sheet not found for production target processing.")
         return analysis_df
-    prod_df = pd.read_excel(xls, sheet_name=prod_sheet_name, header=None)
-    x, y = -1, -1
-    for r in range(min(10, len(prod_df))):
-        for c in range(len(prod_df.columns)):
-            if "target mtd" in str(prod_df.iloc[r, c]).lower():
-                x, y = r, c
-                break
-        if x != -1: break
-    if x != -1:
-        try:
-            target_qty, actual_qty, actual_percent = prod_df.iloc[x, y + 1], prod_df.iloc[x + 1, y + 1], prod_df.iloc[x + 2, y + 1]
-            analysis_df.loc[14, 'Standard'], analysis_df.loc[14, 'Actual'], analysis_df.loc[14, 'Remark'] = f"{target_qty:,.0f} Pcs", f"{actual_qty:,.0f} Pcs", f"Actual production is {actual_qty:,.0f} pcs."
-            analysis_df.loc[15, 'Standard'], analysis_df.loc[15, 'Actual'], analysis_df.loc[15, 'Remark'] = "100 %", f"{actual_percent:.1f} %", f"Achievement is {actual_percent:.1f}%."
-        except IndexError: st.warning("Could not find production target values in the expected cells.")
-    else: st.warning("'Target MTD' keyword not found in 'Gloves Production' sheet.")
+        
+    # Efficiently search for the cell containing "target mtd"
+    mask = prod_df.applymap(lambda x: "target mtd" in str(x).lower())
+    match = mask.stack()
+    if not match.any():
+        st.warning("'Target MTD' keyword not found in 'Gloves Production' sheet.")
+        return analysis_df
+        
+    x, y = match[match].index[0]
+
+    try:
+        target_qty = prod_df.iloc[x, y + 1]
+        actual_qty = prod_df.iloc[x + 1, y + 1]
+        actual_percent = prod_df.iloc[x + 2, y + 1]
+        
+        analysis_df.loc[14, 'Standard'] = f"{target_qty:,.0f} Pcs"
+        analysis_df.loc[14, 'Actual'] = f"{actual_qty:,.0f} Pcs"
+        analysis_df.loc[14, 'Remark'] = f"Actual production is {actual_qty:,.0f} pcs."
+
+        analysis_df.loc[15, 'Standard'] = "100 %"
+        analysis_df.loc[15, 'Actual'] = f"{actual_percent:.1f} %"
+        analysis_df.loc[15, 'Remark'] = f"Achievement is {actual_percent:.1f}%."
+    except IndexError: 
+        st.warning("Could not find production target values in the expected cells.")
+        
     return analysis_df
 
-def process_consumption(xls, target_date, analysis_df):
-    consump_sheet_name = find_sheet_by_keyword(xls, "coal & elec")
-    if not consump_sheet_name:
+def process_consumption(consump_df, target_date, analysis_df):
+    """Processes the consumption DataFrame to find daily consumption."""
+    if consump_df is None:
         st.warning("'coal & elec' sheet not found for consumption processing.")
         return analysis_df
-    consump_df = pd.read_excel(xls, sheet_name=consump_sheet_name, header=None)
-    date_col_index = None
-    for r in range(consump_df.shape[0]):
-        for c in range(consump_df.shape[1]):
-            try:
-                if pd.to_datetime(consump_df.iloc[r, c]).date() == target_date.date():
-                    date_col_index = c
-                    break
-            except (ValueError, TypeError): continue
-        if date_col_index is not None: break
-    if date_col_index is None:
+
+    # Efficiently search for the date
+    date_mask = consump_df.apply(pd.to_datetime, errors='coerce').applymap(lambda x: x.date() == target_date.date() if pd.notna(x) else False)
+    date_match = date_mask.stack()
+    if not date_match.any():
         st.warning(f"No consumption data found for date {target_date.strftime('%Y-%m-%d')}.")
         return analysis_df
-    coal_row_index, elec_row_index = None, None
-    for i in range(consump_df.shape[0]):
-        particular = str(consump_df.iloc[i, 0]).lower()
-        if "coal" in particular: coal_row_index = i
-        if "electri" in particular: elec_row_index = i
-    if coal_row_index is not None:
-        coal_val = consump_df.iloc[coal_row_index, date_col_index]
+        
+    _, date_col_index = date_match[date_match].index[0]
+
+    # Efficiently find the rows for Coal and Electricity
+    first_col = consump_df.iloc[:, 0].str.lower()
+    coal_row_index = first_col[first_col.str.contains("coal", na=False)].index
+    elec_row_index = first_col[first_col.str.contains("electri", na=False)].index
+
+    if not coal_row_index.empty:
+        coal_val = consump_df.iloc[coal_row_index[0], date_col_index]
         analysis_df.loc[17, 'Actual'], analysis_df.loc[17, 'Remark'] = f"{coal_val:,.0f} Kg", f"Coal consumption is {coal_val:,.0f} Kg."
-    if elec_row_index is not None:
-        elec_val = consump_df.iloc[elec_row_index, date_col_index]
+    if not elec_row_index.empty:
+        elec_val = consump_df.iloc[elec_row_index[0], date_col_index]
         analysis_df.loc[18, 'Actual'], analysis_df.loc[18, 'Remark'] = f"{elec_val:,.0f} Unit", f"Electricity consumption is {elec_val:,.0f} unit."
+        
     return analysis_df
 
-def process_abnormalities(xls, analysis_df):
+def process_abnormalities(analysis_df):
+    """Placeholder function to process abnormalities."""
     analysis_df.loc[13, 'Actual'], analysis_df.loc[13, 'Remark'] = "13 Nos", "13 nos. of Abnormalities are found."
     return analysis_df
 
-def process_inventory(xls, analysis_df):
-    prod_sheet_name = find_sheet_by_keyword(xls, "Gloves Production")
-    if not prod_sheet_name:
+def process_inventory(prod_df, analysis_df):
+    """Processes the Gloves Production DataFrame to extract chemical inventory levels."""
+    if prod_df is None:
         st.warning("'Gloves Production' sheet not found for inventory check.")
         return analysis_df
-    prod_df = pd.read_excel(xls, sheet_name=prod_sheet_name, header=None)
-    start_row, start_col = -1, -1
-    for r in range(len(prod_df)):
-        for c in range(len(prod_df.columns)):
-            if "xnbr latex" in str(prod_df.iloc[r, c]).lower():
-                start_row, start_col = r, c
-                break
-        if start_row != -1: break
-    if start_row == -1:
+
+    mask = prod_df.applymap(lambda x: "xnbr latex" in str(x).lower())
+    match = mask.stack()
+    if not match.any():
         st.warning("'XNBR LATEX' keyword not found for inventory check.")
         return analysis_df
+        
+    start_row, start_col = match[match].index[0]
+
     inventory_rows = []
     current_sno = 19
     for r in range(start_row, len(prod_df)):
         particular = prod_df.iloc[r, start_col]
         if pd.isna(particular) or particular == "": break
+        
         actual_val, days_val = prod_df.iloc[r, start_col + 1], prod_df.iloc[r, start_col + 2]
         try: remark = f"Stock available for {int(float(days_val))} days."
         except (ValueError, TypeError): remark = str(days_val)
+        
         if "xnbr latex" in str(particular).lower():
             try:
                 in_transit = prod_df.iloc[r, start_col + 3]
                 if pd.notna(in_transit): remark += f" {in_transit} In transit."
             except IndexError: pass
+            
         inventory_rows.append({'Sl. No.': current_sno, 'Particulars': str(particular).upper(), 'Unit': 'Kg', 'Standard': '', 'Actual': f"{actual_val:,.0f} Kg", 'Remark': remark})
         current_sno += 1
+        
     if inventory_rows:
         analysis_df = pd.concat([analysis_df, pd.DataFrame(inventory_rows).set_index('Sl. No.')])
+        
     return analysis_df
 
-def process_order_details(xls, analysis_df):
-    order_sheet_name = find_sheet_by_keyword(xls, "Clear order details")
-    if not order_sheet_name:
+def process_order_details(order_df, analysis_df):
+    """Processes the order details DataFrame to get financial summaries."""
+    if order_df is None:
         st.warning("'Clear order details' sheet not found.")
         return analysis_df
-    order_df = pd.read_excel(xls, sheet_name=order_sheet_name)
+        
     last_row = order_df.iloc[-1]
-    clear_order_col, dispatch_col, pending_col = None, None, None
-    for col in order_df.columns:
-        col_lower = str(col).lower()
-        if "total payment receive" in col_lower: clear_order_col = col
-        if "total dispatch price" in col_lower: dispatch_col = col
-        if "advance payment" in col_lower: pending_col = col
+    
+    # Flexible column name matching
+    clear_order_col = next((col for col in order_df.columns if "total payment receive" in str(col).lower()), None)
+    dispatch_col = next((col for col in order_df.columns if "total dispatch price" in str(col).lower()), None)
+    pending_col = next((col for col in order_df.columns if "advance payment" in str(col).lower()), None)
+            
     financial_rows = []
     if clear_order_col:
         val = last_row[clear_order_col]
@@ -162,107 +173,108 @@ def process_order_details(xls, analysis_df):
     if pending_col:
         val = last_row[pending_col]
         financial_rows.append({'Sl. No.': 26, 'Particulars': 'PENDING', 'Unit': 'Rs.', 'Standard': '', 'Actual': f"Rs. {val:,.2f}", 'Remark': f"Pending quantity value is Rs. {val:,.2f}"})
+        
     if financial_rows:
         analysis_df = pd.concat([analysis_df, pd.DataFrame(financial_rows).set_index('Sl. No.')])
+        
     return analysis_df
+
+# --- Main App Logic ---
+
+def create_report(xls, target_date):
+    """Main function to create a single analysis report DataFrame."""
+    # Read all necessary sheets once
+    oee_sheet_name = find_sheet_by_keyword(xls, "oee")
+    oee_df = pd.read_excel(xls, sheet_name=oee_sheet_name) if oee_sheet_name else None
+    
+    prod_sheet_name = find_sheet_by_keyword(xls, "Gloves Production")
+    prod_df = pd.read_excel(xls, sheet_name=prod_sheet_name, header=None) if prod_sheet_name else None
+    
+    consump_sheet_name = find_sheet_by_keyword(xls, "coal & elec")
+    consump_df = pd.read_excel(xls, sheet_name=consump_sheet_name, header=None) if consump_sheet_name else None
+    
+    order_sheet_name = find_sheet_by_keyword(xls, "Clear order details")
+    order_df = pd.read_excel(xls, sheet_name=order_sheet_name) if order_sheet_name else None
+
+    if oee_df is None:
+        st.error(f"Could not find 'OEE' sheet. Cannot proceed.")
+        return None
+
+    # Pre-process OEE dates
+    oee_df['Date'] = pd.to_datetime(oee_df['Date'], errors='coerce')
+    oee_df.dropna(subset=['Date'], inplace=True)
+    oee_df.fillna(0, inplace=True)
+
+    # Create the base report structure
+    analysis_data = {'Sl. No.': [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,17,18], 'Particulars': ['LINE 1 Working Hrs.','LINE 1 Production Capacity','LINE 1 Quality','LINE 1 OEE','LINE 2 Working Hrs.','LINE 2 Production Capacity','LINE 2 Quality','LINE 2 OEE','LINE 3 Working Hrs.','LINE 3 Production Capacity','LINE 3 Quality','LINE 3 OEE','ABNORMALITIES (1+2+3)','PRODUCTION TARGET (Qty/day)','PRODUCTION TARGET (in %)','COAL CONSUMPTION PER DAY','ELECTRICITY CONSUMPTION PER DAY'], 'Unit': ['Hrs','Pcs/hrs','%','%','Hrs','Pcs/hrs','%','%','Hrs','Pcs/hrs','%','%','Nos','Pcs','%','Kg','Unit'], 'Standard': ['22 Hrs','18181 Pcs/hrs','100 %','80 %','22 Hrs','22727 Pcs/hrs','100 %','80 %','22 Hrs','22727 Pcs/hrs','100 %','80 %','0 Nos','','','',''], 'Actual': [''] * 17, 'Remark': [''] * 17}
+    analysis_df = pd.DataFrame(analysis_data).set_index('Sl. No.')
+    
+    # Run all processing functions
+    analysis_df = process_oee_data(oee_df, target_date, analysis_df)
+    analysis_df = process_abnormalities(analysis_df)
+    analysis_df = process_production_target(prod_df, analysis_df)
+    analysis_df = process_consumption(consump_df, target_date, analysis_df)
+    analysis_df = process_inventory(prod_df, analysis_df)
+    analysis_df = process_order_details(order_df, analysis_df)
+
+    return analysis_df.sort_index().reset_index().drop(columns=['Sl. No.'])
 
 # --- Streamlit App UI ---
 
 st.set_page_config(layout="wide")
 st.title("📊 Multi-File Analysis Report Generator")
 
-# Initialize session state to hold report data
 if 'report_data' not in st.session_state:
     st.session_state.report_data = []
 
 st.sidebar.header("⚙️ Controls")
-uploaded_files = st.sidebar.file_uploader(
-    "1. Upload Excel Workbooks",
-    type="xlsx",
-    accept_multiple_files=True
-)
+uploaded_files = st.sidebar.file_uploader("1. Upload Excel Workbooks", type="xlsx", accept_multiple_files=True)
 
 file_dates = {}
 if uploaded_files:
     st.sidebar.subheader("2. Set Analysis Dates")
     for uploaded_file in uploaded_files:
-        file_dates[uploaded_file.name] = st.sidebar.date_input(
-            f"Date for {uploaded_file.name}",
-            datetime.date.today(),
-            key=uploaded_file.name
-        )
+        file_dates[uploaded_file.name] = st.sidebar.date_input(f"Date for {uploaded_file.name}", datetime.date.today(), key=uploaded_file.name)
 
     if st.sidebar.button("🚀 Generate Reports", type="primary"):
-        st.session_state.report_data = [] # Clear previous reports
+        st.session_state.report_data = []
         progress_bar = st.progress(0, "Starting processing...")
         
         for i, uploaded_file in enumerate(uploaded_files):
             file_name = uploaded_file.name
             target_date = pd.to_datetime(file_dates[file_name])
-            
-            progress_bar.progress((i) / len(uploaded_files), f"Processing '{file_name}'...")
+            progress_bar.progress(i / len(uploaded_files), f"Processing '{file_name}'...")
             
             try:
                 xls = pd.ExcelFile(uploaded_file)
-                oee_sheet_name = find_sheet_by_keyword(xls, "oee")
-                if not oee_sheet_name:
-                    st.error(f"Could not find 'OEE' sheet in '{file_name}'. Skipping.")
-                    continue
+                final_report_df = create_report(xls, target_date)
+                
+                if final_report_df is not None:
+                    full_workbook_buffer = io.BytesIO()
+                    with pd.ExcelWriter(full_workbook_buffer, engine='openpyxl') as writer:
+                        final_report_df.to_excel(writer, sheet_name='Analysis Points', index=False)
+                        for sheet_name in xls.sheet_names:
+                            pd.read_excel(xls, sheet_name=sheet_name).to_excel(writer, sheet_name=sheet_name, index=False)
                     
-                oee_df = pd.read_excel(xls, sheet_name=oee_sheet_name)
-                oee_df['Date'] = pd.to_datetime(oee_df['Date'], errors='coerce')
-                oee_df.dropna(subset=['Date'], inplace=True)
-                oee_df.fillna(0, inplace=True)
+                    analysis_only_buffer = io.BytesIO()
+                    with pd.ExcelWriter(analysis_only_buffer, engine='openpyxl') as writer:
+                        final_report_df.to_excel(writer, sheet_name='Analysis Points', index=False)
 
-                analysis_data = {'Sl. No.': [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,17,18], 'Particulars': ['LINE 1 Working Hrs.','LINE 1 Production Capacity','LINE 1 Quality','LINE 1 OEE','LINE 2 Working Hrs.','LINE 2 Production Capacity','LINE 2 Quality','LINE 2 OEE','LINE 3 Working Hrs.','LINE 3 Production Capacity','LINE 3 Quality','LINE 3 OEE','ABNORMALITIES (1+2+3)','PRODUCTION TARGET (Qty/day)','PRODUCTION TARGET (in %)','COAL CONSUMPTION PER DAY','ELECTRICITY CONSUMPTION PER DAY'], 'Unit': ['Hrs','Pcs/hrs','%','%','Hrs','Pcs/hrs','%','%','Hrs','Pcs/hrs','%','%','Nos','Pcs','%','Kg','Unit'], 'Standard': ['22 Hrs','18181 Pcs/hrs','100 %','80 %','22 Hrs','22727 Pcs/hrs','100 %','80 %','22 Hrs','22727 Pcs/hrs','100 %','80 %','0 Nos','','','',''], 'Actual': [''] * 17, 'Remark': [''] * 17}
-                analysis_df = pd.DataFrame(analysis_data).set_index('Sl. No.')
-                
-                # Run all processing functions
-                analysis_df = process_oee_data(oee_df, target_date, analysis_df)
-                analysis_df = process_abnormalities(xls, analysis_df)
-                analysis_df = process_production_target(xls, analysis_df)
-                analysis_df = process_consumption(xls, target_date, analysis_df)
-                analysis_df = process_inventory(xls, analysis_df)
-                analysis_df = process_order_details(xls, analysis_df)
-
-                final_report_df = analysis_df.sort_index().reset_index().drop(columns=['Sl. No.'])
-                
-                # --- Create two different buffers for download ---
-                # 1. Buffer for the full workbook
-                full_workbook_buffer = io.BytesIO()
-                with pd.ExcelWriter(full_workbook_buffer, engine='openpyxl') as writer:
-                    final_report_df.to_excel(writer, sheet_name='Analysis Points', index=False)
-                    for sheet_name in xls.sheet_names:
-                        original_sheet_df = pd.read_excel(xls, sheet_name=sheet_name)
-                        original_sheet_df.to_excel(writer, sheet_name=sheet_name, index=False)
-                
-                # 2. Buffer for just the analysis sheet
-                analysis_only_buffer = io.BytesIO()
-                with pd.ExcelWriter(analysis_only_buffer, engine='openpyxl') as writer:
-                    final_report_df.to_excel(writer, sheet_name='Analysis Points', index=False)
-
-                # Store all data for rendering after the loop
-                st.session_state.report_data.append({
-                    'file_name': file_name,
-                    'target_date': target_date,
-                    'report_df': final_report_df,
-                    'full_workbook_buffer': full_workbook_buffer.getvalue(),
-                    'analysis_only_buffer': analysis_only_buffer.getvalue()
-                })
-
+                    st.session_state.report_data.append({
+                        'file_name': file_name, 'target_date': target_date,
+                        'full_workbook_buffer': full_workbook_buffer.getvalue(),
+                        'analysis_only_buffer': analysis_only_buffer.getvalue()
+                    })
             except Exception as e:
                 st.error(f"An error occurred while processing '{file_name}': {e}")
         
         progress_bar.progress(1.0, "All files processed!")
 
-# --- Display reports and download buttons if they exist in session state ---
 if st.session_state.report_data:
     st.header("Generated Reports")
     
     for report in st.session_state.report_data:
         st.subheader(f"Report for '{report['file_name']}' on {report['target_date'].strftime('%Y-%m-%d')}")
-        # The line below that displays the dataframe has been removed.
-        # st.dataframe(report['report_df'].fillna('')) 
         st.download_button(
             label=f"📥 Download Analysis Sheet (.xlsx)",
             data=report['analysis_only_buffer'],
@@ -272,7 +284,6 @@ if st.session_state.report_data:
         )
         st.markdown("---")
 
-    # Prepare the combined ZIP file for download
     if len(st.session_state.report_data) > 1:
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -286,6 +297,5 @@ if st.session_state.report_data:
             file_name="All_Analysis_Reports.zip",
             mime="application/zip",
         )
-
 elif not uploaded_files:
     st.info("Please upload one or more Excel files to begin.")
