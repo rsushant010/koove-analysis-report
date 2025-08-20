@@ -49,7 +49,7 @@ def process_oee_data(oee_df, target_date, analysis_df):
 
 def process_production_target(xls, analysis_df):
     prod_sheet_name = find_sheet_by_keyword(xls, "Gloves Production")
-    if not prod_sheet_name: 
+    if not prod_sheet_name:
         st.warning("'Gloves Production' sheet not found for production target processing.")
         return analysis_df
     prod_df = pd.read_excel(xls, sheet_name=prod_sheet_name, header=None)
@@ -71,7 +71,7 @@ def process_production_target(xls, analysis_df):
 
 def process_consumption(xls, target_date, analysis_df):
     consump_sheet_name = find_sheet_by_keyword(xls, "coal & elec")
-    if not consump_sheet_name: 
+    if not consump_sheet_name:
         st.warning("'coal & elec' sheet not found for consumption processing.")
         return analysis_df
     consump_df = pd.read_excel(xls, sheet_name=consump_sheet_name, header=None)
@@ -84,7 +84,7 @@ def process_consumption(xls, target_date, analysis_df):
                     break
             except (ValueError, TypeError): continue
         if date_col_index is not None: break
-    if date_col_index is None: 
+    if date_col_index is None:
         st.warning(f"No consumption data found for date {target_date.strftime('%Y-%m-%d')}.")
         return analysis_df
     coal_row_index, elec_row_index = None, None
@@ -106,7 +106,7 @@ def process_abnormalities(xls, analysis_df):
 
 def process_inventory(xls, analysis_df):
     prod_sheet_name = find_sheet_by_keyword(xls, "Gloves Production")
-    if not prod_sheet_name: 
+    if not prod_sheet_name:
         st.warning("'Gloves Production' sheet not found for inventory check.")
         return analysis_df
     prod_df = pd.read_excel(xls, sheet_name=prod_sheet_name, header=None)
@@ -117,7 +117,7 @@ def process_inventory(xls, analysis_df):
                 start_row, start_col = r, c
                 break
         if start_row != -1: break
-    if start_row == -1: 
+    if start_row == -1:
         st.warning("'XNBR LATEX' keyword not found for inventory check.")
         return analysis_df
     inventory_rows = []
@@ -141,7 +141,7 @@ def process_inventory(xls, analysis_df):
 
 def process_order_details(xls, analysis_df):
     order_sheet_name = find_sheet_by_keyword(xls, "Clear order details")
-    if not order_sheet_name: 
+    if not order_sheet_name:
         st.warning("'Clear order details' sheet not found.")
         return analysis_df
     order_df = pd.read_excel(xls, sheet_name=order_sheet_name)
@@ -228,13 +228,22 @@ if uploaded_files:
                     # Preview the generated report in the app
                     st.dataframe(final_report_df.fillna(''))
 
-                    # Create the new workbook in memory
+                    # Create the new workbook in memory for download
                     output_buffer = io.BytesIO()
                     with pd.ExcelWriter(output_buffer, engine='openpyxl') as writer:
                         final_report_df.to_excel(writer, sheet_name='Analysis Points', index=False)
                         for sheet_name in xls.sheet_names:
                             original_sheet_df = pd.read_excel(xls, sheet_name=sheet_name)
                             original_sheet_df.to_excel(writer, sheet_name=sheet_name, index=False)
+                    
+                    # Add individual download button for this file
+                    st.download_button(
+                        label=f"📥 Download this report ({file_name})",
+                        data=output_buffer.getvalue(),
+                        file_name=f"Report_{file_name}",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key=f"download_{file_name}"
+                    )
                     
                     # Add the new workbook to the zip file
                     zf.writestr(f"Report_{file_name}", output_buffer.getvalue())
