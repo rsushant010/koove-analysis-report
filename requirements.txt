@@ -1,0 +1,7 @@
+streamlit
+pandas
+io
+datetime
+numpy
+re
+zipfile
