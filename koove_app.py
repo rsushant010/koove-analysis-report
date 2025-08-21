@@ -80,19 +80,48 @@ def process_production_target(prod_df, analysis_df):
     return analysis_df
 
 def process_consumption(consump_df, target_date, analysis_df):
-    """Processes the consumption DataFrame to find daily consumption."""
+    """Processes the consumption DataFrame to find daily consumption, prioritizing the target year."""
     if consump_df is None:
         st.warning("'coal & elec' sheet not found for consumption processing.")
         return analysis_df
 
-    date_mask = consump_df.apply(pd.to_datetime, errors='coerce').applymap(lambda x: x.date() == target_date.date() if pd.notna(x) else False)
-    date_match = date_mask.stack()
-    if not date_match.any():
-        st.warning(f"No consumption data found for date {target_date.strftime('%Y-%m-%d')}.")
-        return analysis_df
-        
-    _, date_col_index = date_match[date_match].index[0]
+    # Convert the entire DataFrame to datetime objects, coercing errors once
+    datetime_df = consump_df.apply(pd.to_datetime, errors='coerce')
+    date_col_index = None
 
+    # 1. First, try to find an exact match for the target date (e.g., for 2025).
+    exact_mask = datetime_df.applymap(lambda x: x.date() == target_date.date() if pd.notna(x) else False)
+    exact_matches = exact_mask.stack()
+
+    if exact_matches.any():
+        # A perfect match for the selected date was found
+        _, date_col_index = exact_matches[exact_matches].index[0]
+    else:
+        # 2. Fallback: If no data for the target year, find the most recent year with the same month/day.
+        st.warning(f"No consumption data for {target_date.strftime('%Y-%m-%d')}. "
+                   f"Searching for data from a different year (e.g., 2024) as a fallback.")
+
+        # Create a mask for all cells matching the month and day
+        fallback_mask = datetime_df.applymap(
+            lambda x: (x.month, x.day) == (target_date.month, target_date.day) if pd.notna(x) else False
+        )
+        
+        if not fallback_mask.any().any():
+            st.warning(f"No consumption data found for {target_date.strftime('%m-%d')} in any year.")
+            return analysis_df
+
+        # Filter the datetime_df with the mask to get only matching dates, then find the latest one
+        matching_dates = datetime_df[fallback_mask].stack()
+        if not matching_dates.empty:
+            latest_date_location = matching_dates.idxmax()  # Returns (row_index, col_index) of the max date
+            date_col_index = latest_date_location[1]        # We only need the column index
+            st.info(f"Using data from the most recent available date: {matching_dates.max().strftime('%Y-%m-%d')}.")
+        else:
+            # This should not be reached if fallback_mask.any().any() is true, but it's a safe fallback.
+            st.warning(f"Could not determine a fallback date for {target_date.strftime('%m-%d')}.")
+            return analysis_df
+
+    # --- Proceed with the found date_col_index ---
     first_col = consump_df.iloc[:, 0].str.lower()
     coal_row_index = first_col[first_col.str.contains("coal", na=False)].index
     elec_row_index = first_col[first_col.str.contains("electri", na=False)].index
@@ -105,6 +134,7 @@ def process_consumption(consump_df, target_date, analysis_df):
         analysis_df.loc[18, 'Actual'], analysis_df.loc[18, 'Remark'] = f"{elec_val:,.0f} Unit", f"Electricity consumption is {elec_val:,.0f} unit."
         
     return analysis_df
+
 
 def process_abnormalities(analysis_df):
     """Placeholder function to process abnormalities."""
