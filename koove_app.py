@@ -85,20 +85,36 @@ def process_consumption(consump_df, target_date, analysis_df):
         st.warning("'coal & elec' sheet not found for consumption processing.")
         return analysis_df
 
-    # Convert the DataFrame to datetime objects, coercing errors to NaT (Not a Time)
-    datetime_df = consump_df.apply(pd.to_datetime, errors='coerce')
+    # --- REVISED LOGIC ---
+    # Iterate through cells to find an exact date match, including the year.
+    # This is a more robust method than applying pd.to_datetime to the entire DataFrame at once.
+    date_col_index = None
 
-    # --- MODIFIED LOGIC ---
-    # Create a mask to find the exact date match by explicitly checking year, month, and day.
-    # This ensures that a date like '2025-08-21' does not match '2024-08-21'.
-    date_mask = datetime_df.applymap(
-        lambda x: (x.year == target_date.year and x.month == target_date.month and x.day == target_date.day) 
-        if pd.notna(x) else False
-    )
-    date_match = date_mask.stack()
+    # We iterate through each cell to find the date.
+    for r_idx, row in consump_df.iterrows():
+        for c_idx, cell_value in row.items():
+            # Skip empty cells
+            if pd.isna(cell_value):
+                continue
+            try:
+                # Attempt to convert the cell's content to a datetime object
+                cell_date = pd.to_datetime(cell_value)
+                
+                # Explicitly compare year, month, and day
+                if (cell_date.year == target_date.year and
+                    cell_date.month == target_date.month and
+                    cell_date.day == target_date.day):
+                    
+                    date_col_index = c_idx # The column index where the date was found
+                    break # Exit the inner loop once the date is found
+            except (ValueError, TypeError):
+                # If conversion fails, it's not a date, so we ignore it and continue
+                continue
+        if date_col_index is not None:
+            break # Exit the outer loop as well
 
-    # Check if any cell matches the exact target date. If not, raise an error.
-    if not date_match.any():
+    # Check if a matching date was found. If not, raise an error.
+    if date_col_index is None:
         st.error(f"CRITICAL: No consumption data found for the exact date {target_date.strftime('%Y-%m-%d')}.")
         st.warning("Please check your 'coal & elec' sheet to ensure this date exists and is formatted correctly (e.g., as YYYY-MM-DD).")
         
@@ -109,9 +125,6 @@ def process_consumption(consump_df, target_date, analysis_df):
         analysis_df.loc[18, 'Remark'] = f"Data for {target_date.strftime('%Y-%m-%d')} not found in source file."
         return analysis_df
         
-    # If a match is found, get its column index
-    _, date_col_index = date_match[date_match].index[0]
-
     # --- Proceed with the found date_col_index ---
     first_col = consump_df.iloc[:, 0].str.lower()
     coal_row_index = first_col[first_col.str.contains("coal", na=False)].index
