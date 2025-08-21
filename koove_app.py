@@ -80,7 +80,7 @@ def process_production_target(prod_df, analysis_df):
     return analysis_df
 
 def process_consumption(consump_df, target_date, analysis_df):
-    """Processes the consumption DataFrame to find daily consumption for the exact target date."""
+    """Processes the consumption DataFrame to find daily consumption for the exact target date, including the year."""
     if consump_df is None:
         st.warning("'coal & elec' sheet not found for consumption processing.")
         return analysis_df
@@ -88,8 +88,13 @@ def process_consumption(consump_df, target_date, analysis_df):
     # Convert the DataFrame to datetime objects, coercing errors to NaT (Not a Time)
     datetime_df = consump_df.apply(pd.to_datetime, errors='coerce')
 
-    # Create a mask to find the exact date match (year, month, and day)
-    date_mask = datetime_df.applymap(lambda x: x.date() == target_date.date() if pd.notna(x) else False)
+    # --- MODIFIED LOGIC ---
+    # Create a mask to find the exact date match by explicitly checking year, month, and day.
+    # This ensures that a date like '2025-08-21' does not match '2024-08-21'.
+    date_mask = datetime_df.applymap(
+        lambda x: (x.year == target_date.year and x.month == target_date.month and x.day == target_date.day) 
+        if pd.notna(x) else False
+    )
     date_match = date_mask.stack()
 
     # Check if any cell matches the exact target date. If not, raise an error.
