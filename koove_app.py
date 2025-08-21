@@ -80,46 +80,32 @@ def process_production_target(prod_df, analysis_df):
     return analysis_df
 
 def process_consumption(consump_df, target_date, analysis_df):
-    """Processes the consumption DataFrame to find daily consumption, prioritizing the target year."""
+    """Processes the consumption DataFrame to find daily consumption for the exact target date."""
     if consump_df is None:
         st.warning("'coal & elec' sheet not found for consumption processing.")
         return analysis_df
 
-    # Convert the entire DataFrame to datetime objects, coercing errors once
+    # Convert the DataFrame to datetime objects, coercing errors to NaT (Not a Time)
     datetime_df = consump_df.apply(pd.to_datetime, errors='coerce')
-    date_col_index = None
 
-    # 1. First, try to find an exact match for the target date (e.g., for 2025).
-    exact_mask = datetime_df.applymap(lambda x: x.date() == target_date.date() if pd.notna(x) else False)
-    exact_matches = exact_mask.stack()
+    # Create a mask to find the exact date match (year, month, and day)
+    date_mask = datetime_df.applymap(lambda x: x.date() == target_date.date() if pd.notna(x) else False)
+    date_match = date_mask.stack()
 
-    if exact_matches.any():
-        # A perfect match for the selected date was found
-        _, date_col_index = exact_matches[exact_matches].index[0]
-    else:
-        # 2. Fallback: If no data for the target year, find the most recent year with the same month/day.
-        st.warning(f"No consumption data for {target_date.strftime('%Y-%m-%d')}. "
-                   f"Searching for data from a different year (e.g., 2024) as a fallback.")
-
-        # Create a mask for all cells matching the month and day
-        fallback_mask = datetime_df.applymap(
-            lambda x: (x.month, x.day) == (target_date.month, target_date.day) if pd.notna(x) else False
-        )
+    # Check if any cell matches the exact target date. If not, raise an error.
+    if not date_match.any():
+        st.error(f"CRITICAL: No consumption data found for the exact date {target_date.strftime('%Y-%m-%d')}.")
+        st.warning("Please check your 'coal & elec' sheet to ensure this date exists and is formatted correctly (e.g., as YYYY-MM-DD).")
         
-        if not fallback_mask.any().any():
-            st.warning(f"No consumption data found for {target_date.strftime('%m-%d')} in any year.")
-            return analysis_df
-
-        # Filter the datetime_df with the mask to get only matching dates, then find the latest one
-        matching_dates = datetime_df[fallback_mask].stack()
-        if not matching_dates.empty:
-            latest_date_location = matching_dates.idxmax()  # Returns (row_index, col_index) of the max date
-            date_col_index = latest_date_location[1]        # We only need the column index
-            st.info(f"Using data from the most recent available date: {matching_dates.max().strftime('%Y-%m-%d')}.")
-        else:
-            # This should not be reached if fallback_mask.any().any() is true, but it's a safe fallback.
-            st.warning(f"Could not determine a fallback date for {target_date.strftime('%m-%d')}.")
-            return analysis_df
+        # Mark the relevant rows in the report as 'Not Found'
+        analysis_df.loc[17, 'Actual'] = 'Not Found'
+        analysis_df.loc[18, 'Actual'] = 'Not Found'
+        analysis_df.loc[17, 'Remark'] = f"Data for {target_date.strftime('%Y-%m-%d')} not found in source file."
+        analysis_df.loc[18, 'Remark'] = f"Data for {target_date.strftime('%Y-%m-%d')} not found in source file."
+        return analysis_df
+        
+    # If a match is found, get its column index
+    _, date_col_index = date_match[date_match].index[0]
 
     # --- Proceed with the found date_col_index ---
     first_col = consump_df.iloc[:, 0].str.lower()
@@ -128,13 +114,14 @@ def process_consumption(consump_df, target_date, analysis_df):
 
     if not coal_row_index.empty:
         coal_val = consump_df.iloc[coal_row_index[0], date_col_index]
-        analysis_df.loc[17, 'Actual'], analysis_df.loc[17, 'Remark'] = f"{coal_val:,.0f} Kg", f"Coal consumption is {coal_val:,.0f} Kg."
+        analysis_df.loc[17, 'Actual'] = f"{coal_val:,.0f} Kg"
+        analysis_df.loc[17, 'Remark'] = f"Coal consumption is {coal_val:,.0f} Kg."
     if not elec_row_index.empty:
         elec_val = consump_df.iloc[elec_row_index[0], date_col_index]
-        analysis_df.loc[18, 'Actual'], analysis_df.loc[18, 'Remark'] = f"{elec_val:,.0f} Unit", f"Electricity consumption is {elec_val:,.0f} unit."
+        analysis_df.loc[18, 'Actual'] = f"{elec_val:,.0f} Unit"
+        analysis_df.loc[18, 'Remark'] = f"Electricity consumption is {elec_val:,.0f} unit."
         
     return analysis_df
-
 
 def process_abnormalities(analysis_df):
     """Placeholder function to process abnormalities."""
