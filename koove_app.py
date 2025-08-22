@@ -54,7 +54,8 @@ def process_production_target(prod_df, analysis_df):
         st.warning("'Gloves Production' sheet not found for production target processing.")
         return analysis_df
         
-    mask = prod_df.applymap(lambda x: "target mtd" in str(x).lower())
+    # FIX: Replaced deprecated 'applymap' with 'map'
+    mask = prod_df.map(lambda x: "target mtd" in str(x).lower())
     match = mask.stack()
     if not match.any():
         st.warning("'Target MTD' keyword not found in 'Gloves Production' sheet.")
@@ -80,24 +81,27 @@ def process_production_target(prod_df, analysis_df):
     return analysis_df
 
 def process_consumption(consump_df, target_date, analysis_df):
-    """Processes the consumption DataFrame to find daily consumption for the exact target date, including the year."""
+    """
+    Processes the consumption DataFrame by iterating through each cell to find an exact 
+    date match (year, month, day) and retrieving consumption data from subsequent rows.
+    """
     if consump_df is None:
         st.warning("'coal & elec' sheet not found for consumption processing.")
         return analysis_df
 
-    # --- REVISED LOGIC ---
-    # Iterate through cells to find an exact date match, including the year.
-    # This is a more robust method than applying pd.to_datetime to the entire DataFrame at once.
-    date_col_index = None
+    # --- NEW CELL-BY-CELL DATE SEARCH LOGIC ---
+    found_coords = None
 
-    # We iterate through each cell to find the date.
-    for r_idx, row in consump_df.iterrows():
-        for c_idx, cell_value in row.items():
-            # Skip empty cells
+    # Iterate through each cell of the DataFrame
+    for r_idx in range(len(consump_df)):
+        for c_idx in range(len(consump_df.columns)):
+            cell_value = consump_df.iloc[r_idx, c_idx]
+            
             if pd.isna(cell_value):
                 continue
+            
             try:
-                # Attempt to convert the cell's content to a datetime object
+                # Attempt to convert cell content to a datetime object
                 cell_date = pd.to_datetime(cell_value)
                 
                 # Explicitly compare year, month, and day
@@ -105,41 +109,44 @@ def process_consumption(consump_df, target_date, analysis_df):
                     cell_date.month == target_date.month and
                     cell_date.day == target_date.day):
                     
-                    date_col_index = c_idx # The column index where the date was found
-                    break # Exit the inner loop once the date is found
+                    found_coords = (r_idx, c_idx)
+                    break # Exit inner loop
             except (ValueError, TypeError):
-                # If conversion fails, it's not a date, so we ignore it and continue
+                # If conversion fails, it's not a date, so we ignore and continue
                 continue
-        if date_col_index is not None:
-            break # Exit the outer loop as well
+        if found_coords:
+            break # Exit outer loop
 
-    # Check if a matching date was found. If not, raise an error.
-    if date_col_index is None:
+    # Check if a matching date was found.
+    if found_coords is None:
         st.error(f"CRITICAL: No consumption data found for the exact date {target_date.strftime('%Y-%m-%d')}.")
-        st.warning("Please check your 'coal & elec' sheet to ensure this date exists and is formatted correctly (e.g., as YYYY-MM-DD).")
+        st.warning("Please check your 'coal & elec' sheet to ensure this date exists and is formatted correctly.")
         
-        # Mark the relevant rows in the report as 'Not Found'
-        analysis_df.loc[17, 'Actual'] = 'Not Found'
-        analysis_df.loc[18, 'Actual'] = 'Not Found'
-        analysis_df.loc[17, 'Remark'] = f"Data for {target_date.strftime('%Y-%m-%d')} not found in source file."
-        analysis_df.loc[18, 'Remark'] = f"Data for {target_date.strftime('%Y-%m-%d')} not found in source file."
+        analysis_df.loc[[17, 18], 'Actual'] = 'Not Found'
+        analysis_df.loc[[17, 18], 'Remark'] = f"Data for {target_date.strftime('%Y-%m-%d')} not found."
         return analysis_df
         
-    # --- Proceed with the found date_col_index ---
-    first_col = consump_df.iloc[:, 0].str.lower()
-    coal_row_index = first_col[first_col.str.contains("coal", na=False)].index
-    elec_row_index = first_col[first_col.str.contains("electri", na=False)].index
-
-    if not coal_row_index.empty:
-        coal_val = consump_df.iloc[coal_row_index[0], date_col_index]
+    # --- Proceed with the found coordinates ---
+    x, y = found_coords
+    
+    try:
+        # Get coal value from the cell directly below the date
+        coal_val = consump_df.iloc[x + 1, y]
         analysis_df.loc[17, 'Actual'] = f"{coal_val:,.0f} Kg"
         analysis_df.loc[17, 'Remark'] = f"Coal consumption is {coal_val:,.0f} Kg."
-    if not elec_row_index.empty:
-        elec_val = consump_df.iloc[elec_row_index[0], date_col_index]
+
+        # Get electricity value from two cells below the date
+        elec_val = consump_df.iloc[x + 2, y]
         analysis_df.loc[18, 'Actual'] = f"{elec_val:,.0f} Unit"
         analysis_df.loc[18, 'Remark'] = f"Electricity consumption is {elec_val:,.0f} unit."
+
+    except IndexError:
+        st.error(f"Found date at ({x},{y}), but could not retrieve consumption data from rows below.")
+        analysis_df.loc[[17, 18], 'Actual'] = 'Data Missing'
+        analysis_df.loc[[17, 18], 'Remark'] = "Consumption data not found in the expected cells below the date."
         
     return analysis_df
+
 
 def process_abnormalities(analysis_df):
     """Placeholder function to process abnormalities."""
@@ -152,7 +159,8 @@ def process_inventory(prod_df, analysis_df):
         st.warning("'Gloves Production' sheet not found for inventory check.")
         return analysis_df
 
-    mask = prod_df.applymap(lambda x: "xnbr latex" in str(x).lower())
+    # FIX: Replaced deprecated 'applymap' with 'map'
+    mask = prod_df.map(lambda x: "xnbr latex" in str(x).lower())
     match = mask.stack()
     if not match.any():
         st.warning("'XNBR LATEX' keyword not found for inventory check.")
@@ -180,7 +188,10 @@ def process_inventory(prod_df, analysis_df):
         current_sno += 1
         
     if inventory_rows:
-        analysis_df = pd.concat([analysis_df, pd.DataFrame(inventory_rows).set_index('Sl. No.')])
+        # Create a temporary DataFrame from the new rows
+        new_rows_df = pd.DataFrame(inventory_rows).set_index('Sl. No.')
+        # Concatenate with the existing analysis_df
+        analysis_df = pd.concat([analysis_df, new_rows_df])
         
     return analysis_df
 
@@ -208,7 +219,8 @@ def process_order_details(order_df, analysis_df):
         financial_rows.append({'Sl. No.': 26, 'Particulars': 'PENDING', 'Unit': 'Rs.', 'Standard': '', 'Actual': f"Rs. {val:,.2f}", 'Remark': f"Pending quantity value is Rs. {val:,.2f}"})
         
     if financial_rows:
-        analysis_df = pd.concat([analysis_df, pd.DataFrame(financial_rows).set_index('Sl. No.')])
+        new_rows_df = pd.DataFrame(financial_rows).set_index('Sl. No.')
+        analysis_df = pd.concat([analysis_df, new_rows_df])
         
     return analysis_df
 
@@ -223,6 +235,7 @@ def create_report(xls, target_date):
     prod_df = pd.read_excel(xls, sheet_name=prod_sheet_name, header=None) if prod_sheet_name else None
     
     consump_sheet_name = find_sheet_by_keyword(xls, "coal & elec")
+    # Read without a header to ensure we can access all cells by integer location
     consump_df = pd.read_excel(xls, sheet_name=consump_sheet_name, header=None) if consump_sheet_name else None
     
     order_sheet_name = find_sheet_by_keyword(xls, "Clear order details")
@@ -279,12 +292,14 @@ if uploaded_files:
             progress_bar.progress(i / len(uploaded_files), f"Processing '{file_name}'...")
             
             try:
-                xls = pd.ExcelFile(uploaded_file)
+                # Use a copy of the buffer for pandas to avoid issues with openpyxl later
+                file_buffer_copy = io.BytesIO(uploaded_file.getvalue())
+                xls = pd.ExcelFile(file_buffer_copy)
                 final_report_df = create_report(xls, target_date)
                 
                 if final_report_df is not None:
                     # Load the original workbook to modify it
-                    uploaded_file.seek(0) # Reset buffer position
+                    uploaded_file.seek(0) # Reset original buffer position
                     wb = load_workbook(uploaded_file)
                     
                     # Create the new sheet at the first position
@@ -312,16 +327,32 @@ if uploaded_files:
 if st.session_state.report_data:
     st.header("Generated Reports")
     
+    # Create a zip file in memory
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        for report in st.session_state.report_data:
+            file_name_in_zip = f"Report_{report['file_name']}"
+            zipf.writestr(file_name_in_zip, report['modified_workbook_buffer'])
+
+    st.download_button(
+        label="📥 Download All Reports (.zip)",
+        data=zip_buffer.getvalue(),
+        file_name="All_Analysis_Reports.zip",
+        mime="application/zip",
+    )
+    st.markdown("---")
+
     for report in st.session_state.report_data:
         st.subheader(f"Report for '{report['file_name']}' on {report['target_date'].strftime('%Y-%m-%d')}")
         st.download_button(
-            label=f"📥 Download Report (.xlsx)",
+            label=f"Download Individual Report (.xlsx)",
             data=report['modified_workbook_buffer'],
             file_name=f"Report_{report['file_name']}",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key=f"download_report_{report['file_name']}"
         )
         st.markdown("---")
+
 
 elif not uploaded_files:
     st.info("Please upload one or more Excel files to begin.")
