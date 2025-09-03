@@ -343,7 +343,7 @@ if st.session_state.report_data:
     st.markdown("---")
 
     for report in st.session_state.report_data:
-        st.subheader(f"Report for '{report['file_name']}' on {report['target_date'].strftime('%Y-%m-%d')}")
+        st.subheader(f"Report for '{report['file_name']}' on {report['target_date'].strftime('%DD-%M')}")
         st.download_button(
             label=f"Download Individual Report (.xlsx)",
             data=report['modified_workbook_buffer'],
