@@ -347,7 +347,8 @@ if st.session_state.report_data:
         st.download_button(
             label=f"Download Individual Report (.xlsx)",
             data=report['modified_workbook_buffer'],
-            file_name=f"Report_{report['file_name']}",
+            # file_name=f"Report_{report['file_name']}",
+            file_name=f"Analysis report {report['target_date'].strftime('%Y-%m-%d')} Dash board for gloves production",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key=f"download_report_{report['file_name']}"
         )
